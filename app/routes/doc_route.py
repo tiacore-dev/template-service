@@ -1,5 +1,6 @@
 from io import BytesIO
 import os
+from zipfile import is_zipfile
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from loguru import logger
@@ -27,6 +28,10 @@ async def generate_file(data: GenerateSchema):
 
     try:
         template_bytes = await manager.download_bytes(data.s3_key)
+        if not is_zipfile(BytesIO(template_bytes)):
+            logger.error(
+                f"Файл по ключу {data.s3_key} не является zip-файлом. Начало файла: {template_bytes[:20]}")
+            raise ValueError("Файл не является корректным DOCX (zip) файлом.")
         logger.debug(f"Шаблон успешно загружен с S3: {data.s3_key}")
     except Exception as e:
         logger.exception(
