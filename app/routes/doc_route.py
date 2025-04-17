@@ -1,6 +1,8 @@
 from io import BytesIO
 import os
 from zipfile import is_zipfile
+from urllib.parse import quote
+from pathlib import Path
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from loguru import logger
@@ -19,7 +21,7 @@ MEDIA_TYPES = {
 }
 
 
-@doc_router.post("/generate")
+@doc_router.post("/generate", response_class=StreamingResponse)
 async def generate_file(data: GenerateSchema):
     logger.info(
         f"Запрос на генерацию файла: name={data.name}, s3_key={data.s3_key}, is_pdf={data.is_pdf}")
@@ -57,14 +59,15 @@ async def generate_file(data: GenerateSchema):
             raise
 
     media_type = MEDIA_TYPES.get(extension, "application/octet-stream")
-    filename = f"{data.name}.{extension}"
+    safe_name = Path(data.name).name.replace('"', '').replace("'", '')
+    filename = f"{safe_name}.{extension}"
 
     logger.info(f"Отправка файла клиенту: {filename}, media_type={media_type}")
+
+    disposition = f"attachment; filename*=UTF-8''{quote(filename)}"
 
     return StreamingResponse(
         BytesIO(document_bytes),
         media_type=media_type,
-        headers={
-            "Content-Disposition": f"attachment; filename={filename}"
-        }
+        headers={"Content-Disposition": disposition}
     )

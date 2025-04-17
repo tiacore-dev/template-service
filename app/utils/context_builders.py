@@ -1,23 +1,25 @@
+from collections import defaultdict
 import datetime
+from loguru import logger
 
 
-def format_date(value) -> str:
+def format_date(value: str) -> str:
+    logger.debug(f"[format_date] Получено: {value} ({type(value)})")
     try:
-        if isinstance(value, str):
+        if isinstance(value, (int, float)):
+            dt = datetime.datetime.fromtimestamp(float(value))
+        elif isinstance(value, str):
             try:
-                # если ISO-строка
-                dt = datetime.datetime.strptime(value, "%Y-%m-%d")
-            except ValueError:
-                # если ISO с временем
                 dt = datetime.datetime.fromisoformat(value)
-        elif isinstance(value, (int, float)):
-            dt = datetime.datetime.fromtimestamp(value)
+            except ValueError:
+                dt = datetime.datetime.strptime(value, "%Y-%m-%d")
         else:
-            return "–"
-
+            raise ValueError("Неподдерживаемый тип")
+        logger.debug(f"[format_date] timestamp: {dt}")
         return dt.strftime("%d.%m.%Y")
-    except Exception:
-        return "–"
+    except Exception as e:
+        logger.error(f"[format_date] Ошибка при форматировании: {value}: {e}")
+        return value
 
 
 def flatten_context(obj, parent_key='', sep='.') -> dict:
@@ -40,3 +42,11 @@ def flatten_context(obj, parent_key='', sep='.') -> dict:
     else:
         items[parent_key] = obj
     return items
+
+
+def deep_defaultdict(value=None):
+    if isinstance(value, dict):
+        return defaultdict(lambda: "-", {k: deep_defaultdict(v) for k, v in value.items()})
+    elif isinstance(value, list):
+        return [deep_defaultdict(v) for v in value]
+    return value
