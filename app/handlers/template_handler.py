@@ -1,11 +1,16 @@
+from collections import defaultdict
 from io import BytesIO
+from typing import Any, Dict
+
 from docxtpl import DocxTemplate
 from loguru import logger
-from openpyxl import load_workbook
-from app.utils.context_builders import format_date, flatten_context, deep_defaultdict
+from xlsxtpl.writerx import BookWriter
+
+from app.exceptions import InvalidTemplateError
+from app.utils.context_builders import deep_defaultdict, format_date
 
 
-def preprocess_dates(context: dict) -> dict:
+def preprocess_dates(context: Any) -> Any:
     def format_value(key, val):
         if isinstance(val, (dict, list)):
             return preprocess_dates(val)
@@ -20,25 +25,38 @@ def preprocess_dates(context: dict) -> dict:
     return context
 
 
-async def handle_docs(data: dict, template_bytes: bytes, extention: str):
+def deep_to_dict(obj: Any) -> Any:
+    if isinstance(obj, defaultdict):
+        return {k: deep_to_dict(v) for k, v in obj.items()}
+    elif isinstance(obj, dict):
+        return {k: deep_to_dict(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [deep_to_dict(i) for i in obj]
+    else:
+        return obj
+
+
+async def handle_docs(data: dict, template_bytes: bytes, extention: str) -> bytes:
     try:
         logger.debug(f"[handle_docs] Обработка шаблона: .{extention}")
         prepared_data = preprocess_dates(data)
-        context = deep_defaultdict(prepared_data)
+        context = deep_to_dict(deep_defaultdict(prepared_data))
+        # ⬅️ здесь приведение к dict
+
         if extention == "docx":
             return generate_docx_from_bytes(template_bytes, context)
         elif extention == "xlsx":
-            return generate_excel_from_template(template_bytes, context)
+            return generate_excel_from_template_with_bookwriter(template_bytes, context)
         else:
-            logger.error(
-                f"[handle_docs] Неподдерживаемое расширение: {extention}")
-            return None
+            raise InvalidTemplateError(f"Неподдерживаемое расширение: {extention}")
+    except InvalidTemplateError:
+        raise
     except Exception as e:
         logger.exception(f"[handle_docs] Ошибка при генерации документа: {e}")
-        return None
+        raise InvalidTemplateError("Ошибка при обработке шаблона или данных") from e
 
 
-def generate_docx_from_bytes(template_bytes: bytes, context: dict) -> bytes:
+def generate_docx_from_bytes(template_bytes: bytes, context: Dict[str, Any]) -> bytes:
     try:
         doc_stream = BytesIO(template_bytes)
         doc = DocxTemplate(doc_stream)
@@ -50,39 +68,27 @@ def generate_docx_from_bytes(template_bytes: bytes, context: dict) -> bytes:
         doc.save(output_stream)
         output_stream.seek(0)
         return output_stream.read()
-    except Exception:
-        logger.exception(
-            "[generate_docx_from_bytes] Ошибка при рендеринге .docx")
-        return b""
+    except Exception as e:
+        logger.exception(f"[generate_docx_from_bytes] Ошибка при рендеринге .docx: {e}")
+        raise InvalidTemplateError("Некорректный шаблон или неподходящие данные") from e
 
 
-def generate_excel_from_template(template_bytes: bytes, context: dict) -> bytes:
+def generate_excel_from_template_with_bookwriter(
+    template_bytes: bytes, context: Dict[str, Any]
+) -> bytes:
     try:
-        flat_ctx = flatten_context(context)
-
         input_stream = BytesIO(template_bytes)
-        workbook = load_workbook(input_stream)
-        sheet = workbook.active
-
-        logger.debug("[generate_excel_from_template] Рендер xlsx шаблона")
-
-        for row in sheet.iter_rows():
-            for cell in row:
-                if isinstance(cell.value, str):
-                    for key, value in flat_ctx.items():
-                        placeholder = f"{{{{ {key} }}}}"
-                        if placeholder in cell.value:
-                            old_val = cell.value
-                            cell.value = cell.value.replace(
-                                placeholder, str(value))
-                            logger.debug(
-                                f"[xlsx] Заменено: {old_val} -> {cell.value}")
-
         output_stream = BytesIO()
-        workbook.save(output_stream)
+
+        writer = BookWriter(input_stream)
+        writer.render_sheet(context)
+        writer.save(output_stream)
+
         output_stream.seek(0)
         return output_stream.read()
+
     except Exception:
-        logger.exception(
-            "[generate_excel_from_template] Ошибка при рендеринге .xlsx")
+        import logging
+
+        logging.exception("Ошибка при генерации xlsx через BookWriter")
         return b""
